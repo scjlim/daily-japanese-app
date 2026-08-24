@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- FIX 1: This stops Google from blocking the audio request -->
+  <meta name="referrer" content="no-referrer">
   <title>Accelerated Japanese</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -16,8 +18,10 @@
   let sentences = [];
   let isPracticeMode = false;
   let isPlayingAll = false;
-  let currentAudio = null;
   let selectedIds = new Set();
+  
+  // FIX 2: Create a single, reusable audio element to bypass mobile autoplay blocks
+  const globalAudioPlayer = new Audio();
 
   async function apiCall(action, payload = {}) {
     document.getElementById('loading').classList.remove('hidden');
@@ -144,36 +148,50 @@
   async function translateUnfilled() {
     if (confirm("Bulk translate all unfilled sentences in this category?")) {
       const category = document.getElementById('category-select').value;
-      await apiCall('translateUnfilled', { category }); // Fixed: Category explicitly sent
+      await apiCall('translateUnfilled', { category });
       loadCategory(category);
     }
   }
 
-  // --- AUDIO LOGIC ---
+  // --- UPDATED AUDIO LOGIC ---
   function playAudio(text) {
     return new Promise((resolve) => {
-      if (currentAudio) currentAudio.pause();
+      globalAudioPlayer.pause(); // Stop anything currently playing
       const speed = parseFloat(document.getElementById('speed-select').value);
-      currentAudio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ja&q=${encodeURIComponent(text)}`);
-      currentAudio.playbackRate = speed;
-      currentAudio.play();
-      currentAudio.onended = resolve;
+      
+      // Assign the new source and speed to our single unlocked player
+      globalAudioPlayer.src = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ja&q=${encodeURIComponent(text)}`;
+      globalAudioPlayer.playbackRate = speed;
+      
+      // Resolve promise when audio ends naturally, or if it errors out
+      globalAudioPlayer.onended = resolve;
+      globalAudioPlayer.onerror = resolve; 
+      
+      globalAudioPlayer.play().catch(err => {
+        console.warn("Mobile autoplay blocked:", err);
+        resolve(); // Resolve anyway so the loop doesn't freeze
+      });
     });
   }
 
   async function playAll() {
     isPlayingAll = !isPlayingAll;
     const btn = document.getElementById('play-all-btn');
-    const gapTime = parseFloat(document.getElementById('gap-input').value) * 1000; // Time gap converted to ms
+    const gapTime = parseFloat(document.getElementById('gap-input').value) * 1000;
 
     if (!isPlayingAll) {
       btn.innerHTML = '<i class="fas fa-play mr-2"></i> Play All';
       btn.classList.replace('bg-red-500', 'bg-green-500');
-      if (currentAudio) currentAudio.pause();
+      globalAudioPlayer.pause();
       return;
     }
+    
     btn.innerHTML = '<i class="fas fa-stop mr-2"></i> Stop';
     btn.classList.replace('bg-green-500', 'bg-red-500');
+
+    // Force an empty play right now on the user's physical tap to fully "unlock" mobile audio
+    globalAudioPlayer.src = "";
+    globalAudioPlayer.play().catch(e => {});
 
     for (let i = 0; i < sentences.length; i++) {
       if (!isPlayingAll) break;
@@ -184,13 +202,14 @@
       card.classList.add('ring-2', 'ring-blue-400');
       
       await playAudio(sentences[i].japanese);
+      
       card.classList.remove('ring-2', 'ring-blue-400');
       
-      // Delay using the custom gap time input
       if (isPlayingAll && i < sentences.length - 1) {
         await new Promise(r => setTimeout(r, gapTime));
       }
     }
+    
     isPlayingAll = false;
     btn.innerHTML = '<i class="fas fa-play mr-2"></i> Play All';
     btn.classList.replace('bg-red-500', 'bg-green-500');
