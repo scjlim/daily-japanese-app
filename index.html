@@ -20,8 +20,8 @@
 </div>
 
 <script>
-  // Notice we now call our local Vercel server instead of Google directly!
-  const API_URL = "/api/gateway"; 
+  const VERCEL_AUTH_URL = "/api/gateway"; 
+  let API_URL = ""; // Remains empty and secure in the source code!
   
   let appPassword = localStorage.getItem('appPassword') || '';
   let sentences = [];
@@ -30,7 +30,7 @@
   let selectedIds = new Set();
   const globalAudioPlayer = new Audio();
 
-  // Login Logic
+  // Login Logic: Talk to Vercel to get the secret URL
   async function login() {
     const input = document.getElementById('password-input').value;
     if (!input) return;
@@ -38,8 +38,7 @@
     document.getElementById('loading').classList.remove('hidden');
     
     try {
-      // Test the password by fetching categories
-      const res = await fetch(`${API_URL}?action=getCategories`, {
+      const res = await fetch(VERCEL_AUTH_URL, {
         headers: { 'x-app-password': appPassword }
       });
       
@@ -48,12 +47,14 @@
         appPassword = '';
         localStorage.removeItem('appPassword');
       } else {
+        const data = await res.json();
+        API_URL = data.targetUrl; // Securely load URL into app memory
         localStorage.setItem('appPassword', appPassword);
         document.getElementById('login-screen').classList.add('hidden');
-        await init(res);
+        await init();
       }
     } catch (e) {
-      alert("Network Error.");
+      alert("Network Error verifying password.");
     } finally {
       document.getElementById('loading').classList.add('hidden');
     }
@@ -63,36 +64,35 @@
   window.onload = async () => {
     if (appPassword) {
       document.getElementById('loading').classList.remove('hidden');
-      const res = await fetch(`${API_URL}?action=getCategories`, {
-        headers: { 'x-app-password': appPassword }
-      });
-      if (res.status === 401) {
-        localStorage.removeItem('appPassword');
-        appPassword = '';
+      try {
+        const res = await fetch(VERCEL_AUTH_URL, {
+          headers: { 'x-app-password': appPassword }
+        });
+        if (res.status === 401) {
+          localStorage.removeItem('appPassword');
+          appPassword = '';
+        } else {
+          const data = await res.json();
+          API_URL = data.targetUrl; // Securely load URL into app memory
+          document.getElementById('login-screen').classList.add('hidden');
+          await init();
+        }
+      } catch(e) {
+        alert("Server unreachable.");
+      } finally {
         document.getElementById('loading').classList.add('hidden');
-      } else {
-        document.getElementById('login-screen').classList.add('hidden');
-        await init(res);
       }
     }
   };
 
+  // Direct communication with Google using the unlocked URL
   async function apiCall(action, payload = {}) {
     document.getElementById('loading').classList.remove('hidden');
     try {
       const res = await fetch(API_URL, {
         method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-          'x-app-password': appPassword
-        },
         body: JSON.stringify({ action, ...payload })
       });
-      if (res.status === 401) {
-        alert("Session expired or unauthorized.");
-        location.reload();
-        return;
-      }
       const result = await res.json();
       if (result.error) alert(result.error);
       return result;
@@ -103,15 +103,10 @@
     }
   }
 
-  async function init(initialRes) {
-    let categories;
-    if (initialRes) {
-      categories = await initialRes.json();
-    } else {
-      const res = await fetch(`${API_URL}?action=getCategories`, { headers: { 'x-app-password': appPassword } });
-      categories = await res.json();
-    }
-    
+  async function init() {
+    document.getElementById('loading').classList.remove('hidden');
+    const res = await fetch(`${API_URL}?action=getCategories`);
+    const categories = await res.json();
     const select = document.getElementById('category-select');
     select.innerHTML = '';
     categories.forEach(cat => {
@@ -126,9 +121,7 @@
   async function loadCategory(category) {
     document.getElementById('loading').classList.remove('hidden');
     selectedIds.clear();
-    const res = await fetch(`${API_URL}?category=${encodeURIComponent(category)}`, {
-      headers: { 'x-app-password': appPassword }
-    });
+    const res = await fetch(`${API_URL}?category=${encodeURIComponent(category)}`);
     sentences = await res.json();
     renderCards();
     document.getElementById('loading').classList.add('hidden');
@@ -179,7 +172,7 @@
     const name = prompt("Enter new category name:");
     if (!name) return;
     await apiCall('addCategory', { category: name });
-    init(); // Must reload completely to fetch new dropdown
+    init();
   }
 
   async function deleteCategory() {
